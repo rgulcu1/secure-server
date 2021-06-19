@@ -19,6 +19,11 @@ public class PublicKey implements Key {
         this.e = new BigInteger(publicKeyRequestModel.getE(),16);;
     }
 
+    public PublicKey(String n, String e) {
+        this.n = new BigInteger(n,16);
+        this.e = new BigInteger(e,16);;
+    }
+
     public PublicKey(final BigInteger n, final BigInteger e) {
         this.n = n;
         this.e = e;

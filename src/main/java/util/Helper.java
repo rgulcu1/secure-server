@@ -1,7 +1,9 @@
 package util;
 
+import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 
+import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Array;
 import java.math.BigInteger;
 import java.nio.charset.Charset;
@@ -144,9 +146,21 @@ public class Helper {
         return strArr;
     }
 
-    public static String decodeStringToHex(String str) {
+    public static String encodeStringToHex(String str) {
 
         return Hex.encodeHexString(str.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static String decodeHexToString(String hexStr) {
+
+        byte[] bytes = new byte[0];
+        try {
+            bytes = Hex.decodeHex(hexStr.toCharArray());
+        } catch (DecoderException e) {
+            e.printStackTrace();
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
+
     }
 
 }

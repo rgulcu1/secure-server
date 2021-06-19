@@ -12,6 +12,7 @@ import java.net.Socket;
 
 import com.google.gson.Gson;
 import model.ImageInfo;
+import model.NotificateImage;
 import model.User;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -19,6 +20,7 @@ import request.ImagePostRequest;
 import request.LoginRequest;
 import request.PublicKeyRequestModel;
 import request.RegisterRequest;
+import response.ImageDisplayResponse;
 import response.NotificationResponse;
 import response.RegisterResponse;
 import response.Response;
@@ -27,7 +29,10 @@ import util.Helper;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static util.Constants.RequestType.REGISTER;
 
@@ -83,11 +88,15 @@ public class Server {
             case LOGIN:
                 final LoginRequest loginRequest = gson.fromJson(request, LoginRequest.class);
                 return login(loginRequest);
+            case LOGOUT:
+                return logout(requestJson);
             case POST_IMAGE:
                 final ImagePostRequest postRequest = gson.fromJson(request, ImagePostRequest.class);
                 return postImage(postRequest);
             case NOTIFICATION:
                 return checkForNotification(requestJson);
+            case DISPLAY:
+                return sendImage(requestJson);
         }
 
         return null;
@@ -119,7 +128,7 @@ public class Server {
                 .put("n", publicKey.getN())
                 .put("e", publicKey.getE());
         userJson.put("publicKey", userPublicKey);
-        final String s = Helper.decodeStringToHex(userJson.toString()).toUpperCase();
+        final String s = Helper.encodeStringToHex(userJson.toString()).toUpperCase();
         return serverPrivateKey.encrypt(s);
     }
 
@@ -131,11 +140,27 @@ public class Server {
         }
 
         final User user = userMap.get(username);
+        if(user.getStatus().equals(Constants.Status.ONLINE)) return new Response(400, "This user already online");
+        user.setStatus(Constants.Status.ONLINE);
         final String password = loginRequest.getPassword();
 
         if(!user.getPassword().equals(password)) return new Response(401, "Password is wrong!");
 
         return new Response(200, "Login successful");
+    }
+
+    private static Response logout(JSONObject request) {
+
+        final String username = request.getString("username");
+
+        if (!userMap.containsKey(username)) {
+            return new Response(400, "USername not valid");
+        }
+
+        final User user = userMap.get(username);
+        user.setStatus(Constants.Status.OFFLINE);
+
+        return new Response(200, "Logout successful");
     }
 
     private static Response postImage(ImagePostRequest postRequest) {
@@ -147,12 +172,11 @@ public class Server {
 
         final ImageInfo imageInfo = new ImageInfo(postRequest.getImage(), postRequest.getImageName(), postRequest.getOwner(), decryptedKey, postRequest.getDigitalSignature(), decryptedIV);
         images.add(imageInfo);
+        final List<User> onlineUsers = userMap.values().stream().filter(user -> user.getStatus().equals(Constants.Status.ONLINE)).collect(Collectors.toList());
 
-        final Set<String> usernames = userMap.keySet();
-
-        usernames.forEach(username -> {
-            if(!username.equals(postRequest.getOwner())) {
-                final ArrayList<ImageInfo> images = notificationMap.get(username);
+        onlineUsers.forEach(user -> {
+            if(!user.getUsername().equals(postRequest.getOwner())) {
+                final ArrayList<ImageInfo> images = notificationMap.get(user.getUsername());
                 images.add(imageInfo);
             }
         });
@@ -166,17 +190,56 @@ public class Server {
         final ArrayList<ImageInfo> imageInfos = notificationMap.get(username);
 
         if(imageInfos.isEmpty()) return new Response(400, "");
-        JSONArray imagesForNotificate = new JSONArray();
-        imageInfos.forEach(image -> {
-            final JSONObject imageInfo = new JSONObject()
-                    .put("imageName", image.getImageName())
-                    .put("owner", image.getOwner());
+        final ArrayList<NotificateImage> notificateImages = new ArrayList<>();
 
-            imagesForNotificate.put(imageInfo);
+        imageInfos.forEach(image -> {
+            notificateImages.add(new NotificateImage(image.getImageName(), image.getOwner()));
         });
         imageInfos.clear();
 
-        return new NotificationResponse(200,"",imagesForNotificate.toString());
+        return new NotificationResponse(200,"",notificateImages);
+    }
+
+    private static Response sendImage(JSONObject request) {
+
+        final String imageName = request.getString("imageName");
+        final String username = request.getString("username");
+
+        final ImageInfo foundImage = images.stream().filter(imageInfo -> imageInfo.getImageName().equals(imageName)).findFirst().orElse(null);
+
+        if(Objects.isNull(foundImage)) return new Response(400, "Image Not found!");
+
+        final String image = foundImage.getImage();
+        final String signature = foundImage.getSignature();
+        final String owner = foundImage.getOwner();
+        final String certificate = userMap.get(owner).getCertificate();
+        final String key = foundImage.getKey();
+        final String IV = foundImage.getIV();
+
+        System.out.println("realKey:" + key);
+
+        final PublicKey userPublicKey = getPublicKeyFromCertificate(userMap.get(username).getCertificate());
+
+        final String encryptedAESKey = userPublicKey.encrypt(key);
+        final String encryptedIV = userPublicKey.encrypt(IV);
+        System.out.println("encKey:" + encryptedAESKey);
+
+        return new ImageDisplayResponse(200,"",image, signature, owner, certificate, encryptedAESKey, encryptedIV);
+    }
+
+    private static PublicKey getPublicKeyFromCertificate(String certificate) {
+
+        final String decrypt = serverPublicKey.decrypt(certificate);
+
+        final String certificateText = Helper.decodeHexToString(decrypt);
+
+        final JSONObject jsonObject = new JSONObject(certificateText);
+
+        final JSONObject publicKeyJson = jsonObject.getJSONObject("publicKey");
+        final String n = publicKeyJson.getString("n");
+        final String e = publicKeyJson.getString("e");
+
+        return new PublicKey(n,e);
     }
 
 }
